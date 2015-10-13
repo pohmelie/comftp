@@ -6,12 +6,17 @@ Usage:
     comftp [options]
 
 Options:
-    -q, --quiet                  set logging level to "ERROR" instead of "INFO"
-    --host=host                  host for binding [default: 127.0.0.1]
-    --port=port                  port for binding [default: 8021]
-    --serial-port=serial-port    serial port for binding
-    --serial-speed=serial-speed  speed of serial port connection
-                                 [default: 115200]
+    -q, --quiet                     set logging level to "ERROR" instead of
+                                    "INFO"
+    --host=host                     host for binding [default: 127.0.0.1]
+    --port=port                     port for binding [default: 8021]
+    --serial-port=serial-port       serial port for binding
+    --serial-speed=serial-speed     speed of serial port connection
+                                    [default: 115200]
+    --ftrans-send=template          ftrans xmodem send template
+                                    [default: f /s {filename}]
+    --ftrans-receive=template       ftrans xmodem receive template
+                                    [default: f {filename}]
 """
 import asyncio
 import logging
@@ -137,10 +142,13 @@ class AioSerial(serial.Serial):
 
 class SerialPathIO(aioftp.AbstractPathIO):
 
-    def __init__(self, serial, *args, **kwargs):
+    def __init__(self, serial, *args, send_template, receive_template,
+                 **kwargs):
 
         super().__init__(*args, **kwargs)
         self.serial = serial
+        self.send_template = send_template
+        self.receive_template = receive_template
         self.root = pathlib.Path("/")
         self.cach = {}
 
@@ -386,7 +394,12 @@ class SerialPathIO(aioftp.AbstractPathIO):
         if mode == "rb":
 
             self.transfer_size, *_ = yield from self.stat(path)
-            command = str.encode("f /s " + dos_path)
+            command = str.encode(
+                str.format(
+                    self.send_template,
+                    filename=dos_path
+                )
+            )
             yield from self._do_command(command, " ... ")
             self.serial.write(NAK)
 
@@ -397,7 +410,12 @@ class SerialPathIO(aioftp.AbstractPathIO):
 
                 self.cach.pop(arg)
 
-            command = str.encode("f " + dos_path)
+            command = str.encode(
+                str.format(
+                    self.receive_template,
+                    filename=dos_path
+                )
+            )
             yield from self._do_command(command, " ... ")
             yield from self.serial.read_until(NAK)
 
@@ -526,7 +544,12 @@ if __name__ == "__main__":
 
     loop.run_until_complete(s.init())
 
-    path_io_factory = functools.partial(SerialPathIO, s)
+    path_io_factory = functools.partial(
+        SerialPathIO,
+        s,
+        send_template=args["--ftrans-send"],
+        receive_template=args["--ftrans-receive"]
+    )
 
     print(str.format("aioftp v{}", aioftp.__version__))
     user = aioftp.User(base_path="/")
