@@ -33,7 +33,8 @@ import serial.tools.list_ports
 import aioftp
 
 
-EOL = str.encode("\r\n", "utf-8")
+# EOL = str.encode("\r\n", "utf-8")
+EOL = str.encode("\r", "utf-8")
 SOH = b"\x01"
 STX = b"\x02"
 EOT = b"\x04"
@@ -123,7 +124,9 @@ class AioSerial(serial.Serial):
         while True:
 
             # ctrl-b to bypass autoexec
-            self.write(b"\x02" + EOL)
+            self.write(b"\x02")
+            yield from asyncio.sleep(0.5)
+            self.write(EOL)
             try:
 
                 yield from asyncio.wait_for(self.read_until(), 0.1)
@@ -171,10 +174,10 @@ class SerialPathIO(aioftp.AbstractPathIO):
         blob = None
         while not blob:
 
-            self.serial.write(command)
             for ch in command:
 
-                check_ch = yield from self.serial.aread(timeout=0.1)
+                self.serial.write(bytes([ch]))
+                check_ch = yield from self.serial.aread(timeout=0.25)
                 if check_ch is None or ch != check_ch[0]:
 
                     yield from self._do_command_erase(len(command) * 2)
@@ -299,21 +302,27 @@ class SerialPathIO(aioftp.AbstractPathIO):
 
     def _parse_dir_file_result(self, line):
 
-        name, ext, is_dir = map(str.strip, (line[:8], line[9:12], line[13:18]))
+        name, ext, size, date = map(
+            str.strip,
+            (
+                line[:8],
+                line[9:12],
+                line[13:26],
+                line[26:36],
+            )
+        )
         if ext:
 
             name = name + "." + ext
 
         name = str.lower(name)
-        is_dir = is_dir == "<DIR>"
+        is_dir = size == "<DIR>"
         if is_dir:
 
             size = 0
-            date, *_ = filter(len, str.split(line[19:]))
 
         else:
 
-            size, date, *_ = filter(len, str.split(line[13:]))
             size = int(str.replace(size, ",", ""))
 
         date = datetime.datetime.strptime(date, "%m-%d-%y")
@@ -332,7 +341,7 @@ class SerialPathIO(aioftp.AbstractPathIO):
                 return
 
             lines = tuple(map(str.strip, str.split(s, "\n")))
-            files = lines[6:-4]
+            files = lines[5:-3]
             all_info = map(self._parse_dir_file_result, files)
             files_info = filter(lambda i: i[0] not in (".", ".."), all_info)
             self.cach[arg] = tuple(files_info)
@@ -422,6 +431,8 @@ class SerialPathIO(aioftp.AbstractPathIO):
         else:
 
             raise NotImplementedError
+
+        return path
 
     @asyncio.coroutine
     def write(self, file, data):
