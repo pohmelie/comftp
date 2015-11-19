@@ -15,6 +15,8 @@ Options:
                                     [default: 115200]
     --ftrans-send=template          ftrans xmodem send template
                                     [default: f /s {filename}]
+    --ftrans-size=template          ftrans xmodem send template size adder
+                                    [default: {size}]
     --ftrans-receive=template       ftrans xmodem receive template
                                     [default: f {filename}]
 """
@@ -46,6 +48,25 @@ CAN = b"\x18"
 CRC = b"C"
 
 
+class ComFtpServer(aioftp.Server):
+
+    @aioftp.ConnectionConditions(aioftp.ConnectionConditions.login_required)
+    @asyncio.coroutine
+    def allo(self, connection, rest):
+
+        try:
+
+            connection.path_io.allocate_size = int(rest)
+
+        except ValueError:
+
+            connection.path_io.allocate_size = None
+
+        connection.response("200", "size argument will be passed")
+
+        return True
+
+
 class AioSerial(serial.Serial):
 
     def __init__(self, *args, loop=None, **kwargs):
@@ -54,7 +75,7 @@ class AioSerial(serial.Serial):
         self.loop = loop or asyncio.get_event_loop()
         self._data = collections.deque()
         self.aread_lock = asyncio.Lock(loop=self.loop)
-        self.loop.create_task(self.reader())
+        self.reader_task = self.loop.create_task(self.reader())
 
     @asyncio.coroutine
     def reader(self):
@@ -66,6 +87,11 @@ class AioSerial(serial.Serial):
             if self.aread_lock.locked():
 
                 self.aread_lock.release()
+
+    def close(self):
+
+        super().close()
+        self.reader_task.cancel()
 
     @asyncio.coroutine
     def aread(self, size=1, *, timeout=None):
@@ -92,7 +118,7 @@ class AioSerial(serial.Serial):
         return data
 
     @asyncio.coroutine
-    def read_until(self, expected_tail=":\\>", *, timeout=None):
+    def read_until(self, expected_tail=">", *, timeout=None):
 
         size = len(expected_tail)
         if isinstance(expected_tail, str):
@@ -145,15 +171,17 @@ class AioSerial(serial.Serial):
 
 class SerialPathIO(aioftp.AbstractPathIO):
 
-    def __init__(self, serial, *args, send_template, receive_template,
-                 **kwargs):
+    def __init__(self, serial, *args, send_template, size_template,
+                 receive_template, **kwargs):
 
         super().__init__(*args, **kwargs)
         self.serial = serial
         self.send_template = send_template
         self.receive_template = receive_template
+        self.receive_size_template = size_template
         self.root = pathlib.Path("/")
         self.cach = {}
+        self.allocate_size = None
 
     def _prepare_path(self, path):
 
@@ -419,10 +447,23 @@ class SerialPathIO(aioftp.AbstractPathIO):
 
                 self.cach.pop(arg)
 
+            if self.allocate_size is not None:
+
+                template = (
+                    self.receive_template +
+                    " " +
+                    self.receive_size_template
+                )
+
+            else:
+
+                template = self.receive_template
+
             command = str.encode(
                 str.format(
-                    self.receive_template,
-                    filename=dos_path
+                    template,
+                    filename=dos_path,
+                    size=self.allocate_size
                 )
             )
             yield from self._do_command(command, " ... ")
@@ -559,12 +600,13 @@ if __name__ == "__main__":
         SerialPathIO,
         s,
         send_template=args["--ftrans-send"],
+        size_template=args["--ftrans-size"],
         receive_template=args["--ftrans-receive"]
     )
 
     print(str.format("aioftp v{}", aioftp.__version__))
     user = aioftp.User(base_path="/")
-    server = aioftp.Server(users=[user], path_io_factory=path_io_factory)
+    server = ComFtpServer(users=[user], path_io_factory=path_io_factory)
     loop.run_until_complete(server.start(args["--host"], int(args["--port"])))
     try:
 
@@ -574,5 +616,5 @@ if __name__ == "__main__":
 
         server.close()
         loop.run_until_complete(server.wait_closed())
-        loop.close()
         s.close()
+        loop.close()
