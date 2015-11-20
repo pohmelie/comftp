@@ -118,7 +118,7 @@ class AioSerial(serial.Serial):
         return data
 
     @asyncio.coroutine
-    def read_until(self, expected_tail=">", *, timeout=None):
+    def read_until(self, expected_tail=":\\>", *, timeout=None):
 
         size = len(expected_tail)
         if isinstance(expected_tail, str):
@@ -182,6 +182,7 @@ class SerialPathIO(aioftp.AbstractPathIO):
         self.root = pathlib.Path("/")
         self.cach = {}
         self.allocate_size = None
+        self.at_root = False
 
     def _prepare_path(self, path):
 
@@ -198,6 +199,11 @@ class SerialPathIO(aioftp.AbstractPathIO):
 
     @asyncio.coroutine
     def _do_command(self, command, expected_tail=":\\>"):
+
+        if not self.at_root:
+
+            self.at_root = True
+            yield from self._do_command(b"cd \\")
 
         blob = None
         while not blob:
