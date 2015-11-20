@@ -600,7 +600,7 @@ if __name__ == "__main__":
         loop=loop,
     )
 
-    loop.run_until_complete(s.init())
+    # loop.run_until_complete(s.init())
 
     path_io_factory = functools.partial(
         SerialPathIO,
